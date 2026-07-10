@@ -2,6 +2,7 @@
 """
 
 # coding=utf-8
+import errno
 import logging
 import socket
 import time
@@ -105,6 +106,15 @@ class Tello:
 
         global threads_initialized, client_socket, drones
 
+        # Normalize the host to its numeric address: udp_response_receiver keys the drones dict
+        # by the RESPONDER's address string, so Tello(host='localhost') would register under
+        # 'localhost' while replies arrive from '127.0.0.1' and get dropped (command timeouts).
+        # Unresolvable names keep the raw string (previous behavior).
+        try:
+            host = socket.gethostbyname(host)
+        except socket.gaierror:
+            pass
+
         self.address = (host, Tello.CONTROL_UDP_PORT)
         self.stream_on = False
         self.retry_count = retry_count
@@ -116,13 +126,17 @@ class Tello:
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
                 client_socket.bind(("", Tello.CONTROL_UDP_PORT))
-            except OSError:
-                # The port is taken — typically a Tello SIMULATOR speaking the SDK protocol on
-                # this same machine (it must LISTEN on 8889, and two sockets can't both bind it).
-                # The drone (real or simulated) replies to the SOURCE address:port of each
-                # command datagram, so the local bind number is a convention, not a protocol
-                # requirement: fall back to an ephemeral port. Real-drone runs are unaffected
-                # (no conflict there, so the default bind above still wins).
+            except OSError as e:
+                # Fall back ONLY for address-in-use — typically a Tello SIMULATOR speaking the
+                # SDK protocol on this same machine (it must LISTEN on 8889, and two sockets
+                # can't both bind it). The drone (real or simulated) replies to the SOURCE
+                # address:port of each command datagram, so the local bind number is a
+                # convention, not a protocol requirement: an ephemeral port works. Real-drone
+                # runs are unaffected (no conflict there, so the default bind above wins).
+                # Any OTHER bind failure (permissions, bad address family, ...) is a real
+                # startup problem and must propagate.
+                if e.errno != errno.EADDRINUSE:
+                    raise
                 client_socket.bind(("", 0))
                 Tello.LOGGER.info(
                     "UDP port {} busy (Tello simulator on this machine?) — bound local port {} "
