@@ -114,7 +114,19 @@ class Tello:
         if not threads_initialized:
             # Run Tello command responses UDP receiver on background
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            client_socket.bind(("", Tello.CONTROL_UDP_PORT))
+            try:
+                client_socket.bind(("", Tello.CONTROL_UDP_PORT))
+            except OSError:
+                # The port is taken — typically a Tello SIMULATOR speaking the SDK protocol on
+                # this same machine (it must LISTEN on 8889, and two sockets can't both bind it).
+                # The drone (real or simulated) replies to the SOURCE address:port of each
+                # command datagram, so the local bind number is a convention, not a protocol
+                # requirement: fall back to an ephemeral port. Real-drone runs are unaffected
+                # (no conflict there, so the default bind above still wins).
+                client_socket.bind(("", 0))
+                Tello.LOGGER.info(
+                    "UDP port {} busy (Tello simulator on this machine?) — bound local port {} "
+                    "instead".format(Tello.CONTROL_UDP_PORT, client_socket.getsockname()[1]))
             response_receiver_thread = Thread(target=Tello.udp_response_receiver)
             response_receiver_thread.daemon = True
             response_receiver_thread.start()
